@@ -26,49 +26,14 @@ cache_collection = db["api_cache"]
 
 # --- OANDA INSTRUMENT CONFIGURATION & MAPPING (ALL 28 PAIRS) ---
 OANDA_SYMBOL_MAP = {
-    # USD Majors (7 pairs)
-    "EURUSD": "EUR_USD",
-    "GBPUSD": "GBP_USD",
-    "AUDUSD": "AUD_USD",
-    "NZDUSD": "NZD_USD",
-    "USDCHF": "USD_CHF",
-    "USDCAD": "USD_CAD",
-    "USDJPY": "USD_JPY",
-    
-    # EUR Crosses (5 pairs)
-    "EURGBP": "EUR_GBP",
-    "EURAUD": "EUR_AUD",
-    "EURNZD": "EUR_NZD",
-    "EURCAD": "EUR_CAD",
-    "EURCHF": "EUR_CHF",
-    "EURJPY": "EUR_JPY",
-    
-    # GBP Crosses (5 pairs)
-    "GBPAUD": "GBP_AUD",
-    "GBPNZD": "GBP_NZD",
-    "GBPCAD": "GBP_CAD",
-    "GBPCHF": "GBP_CHF",
-    "GBPJPY": "GBP_JPY",
-    
-    # AUD Crosses (4 pairs)
-    "AUDNZD": "AUD_NZD",
-    "AUDCAD": "AUD_CAD",
-    "AUDCHF": "AUD_CHF",
-    "AUDJPY": "AUD_JPY",
-    
-    # NZD Crosses (3 pairs)
-    "NZDCAD": "NZD_CAD",
-    "NZDCHF": "NZD_CHF",
-    "NZDJPY": "NZD_JPY",
-    
-    # CAD Crosses (2 pairs)
-    "CADCHF": "CAD_CHF",
-    "CADJPY": "CAD_JPY",
-    
-    # CHF Crosses (1 pair)
+    "EURUSD": "EUR_USD", "GBPUSD": "GBP_USD", "AUDUSD": "AUD_USD", "NZDUSD": "NZD_USD",
+    "USDCHF": "USD_CHF", "USDCAD": "USD_CAD", "USDJPY": "USD_JPY",
+    "EURGBP": "EUR_GBP", "EURAUD": "EUR_AUD", "EURNZD": "EUR_NZD", "EURCAD": "EUR_CAD", "EURCHF": "EUR_CHF", "EURJPY": "EUR_JPY",
+    "GBPAUD": "GBP_AUD", "GBPNZD": "GBP_NZD", "GBPCAD": "GBP_CAD", "GBPCHF": "GBP_CHF", "GBPJPY": "GBP_JPY",
+    "AUDNZD": "AUD_NZD", "AUDCAD": "AUD_CAD", "AUDCHF": "AUD_CHF", "AUDJPY": "AUD_JPY",
+    "NZDCAD": "NZD_CAD", "NZDCHF": "NZD_CHF", "NZDJPY": "NZD_JPY",
+    "CADCHF": "CAD_CHF", "CADJPY": "CAD_JPY",
     "CHFJPY": "CHF_JPY",
-    
-    # Commodities / Extras (1 pair)
     "XAUUSD": "XAU_USD"
 }
 
@@ -105,7 +70,7 @@ def get_current_session_details(ny_dt):
 def clean_symbol_key(key_str):
     return re.sub(r'[^a-zA-Z]', '', str(key_str)).lower()
 
-# --- CONCURRENT OANDA API CONNECTOR ---
+# --- CONCURRENT OANDA API CONNECTOR WITH VERBOSE LOGGING ---
 def fetch_single_oanda_sentiment(pair_name, oanda_symbol):
     """Fetches and processes the position book data for a single instrument from Oanda"""
     try:
@@ -115,7 +80,10 @@ def fetch_single_oanda_sentiment(pair_name, oanda_symbol):
             "Content-Type": "application/json"
         }
         response = requests.get(url, headers=headers, timeout=5)
+        
+        # Verbose Logging: Capture exactly what Oanda is returning if it's not successful
         if response.status_code != 200:
+            print(f"⚠️ [OANDA API ERROR] {pair_name} ({oanda_symbol}) failed. Status: {response.status_code}. Details: {response.text}")
             return pair_name, None
             
         data = response.json()
@@ -123,7 +91,6 @@ def fetch_single_oanda_sentiment(pair_name, oanda_symbol):
         buckets = pos_book.get("buckets", [])
         price = float(pos_book.get("price", 0))
         
-        # Aggregate the long and short retail positioning ratios across the order book
         long_volume = sum(float(b.get("longCountPercent", 0)) for b in buckets)
         short_volume = sum(float(b.get("shortCountPercent", 0)) for b in buckets)
         
@@ -135,7 +102,7 @@ def fetch_single_oanda_sentiment(pair_name, oanda_symbol):
             "timestamp": pos_book.get("time")
         }
     except Exception as e:
-        print(f"Oanda API Error [{pair_name}]: {str(e)}")
+        print(f"❌ [OANDA API EXCEPTION] {pair_name}: {str(e)}")
         return pair_name, None
 
 def fetch_live_data_from_api():
@@ -261,7 +228,7 @@ def run_background_state_scheduler():
                         {"$set": {"transition_counter": current_count}}
                     )
 
-            # --- OVERALL DAILY SENTIMENT ANCHOR CALIBRATION (5:00 PM NY RESET) ---
+            # --- OVERALL DAILY SENTIMENT ANCHOR CALIBRATION ---
             stored_daily_baseline = load_db_document(daily_baseline_collection, "daily_state_doc")
             if ny_now.hour >= 17:
                 current_daily_anchor_date = ny_now.strftime("%Y-%m-%d")
@@ -308,7 +275,6 @@ def process_sentiment_matrix():
     stored_daily_baseline = load_db_document(daily_baseline_collection, "daily_state_doc")
     daily_baseline_volumes = stored_daily_baseline.get("volumes", {})
 
-    # --- LIVE CONTINUOUS SENTIMENT CALCULATION ---
     majors = ["EUR", "GBP", "USD", "AUD", "NZD", "CAD", "CHF", "JPY"]
     tracked_assets = majors + ["GOLD"]
     
@@ -362,7 +328,6 @@ def process_sentiment_matrix():
                 absolute_long_pct_sum[quote] += (live_short / total_live)
                 absolute_pair_counts[quote] += 1
             
-            # 1. Session Relative Deltas
             base_marker = baseline_volumes.get(name, {})
             b_long = float(base_marker.get("longVolume") or live_long)
             b_short = float(base_marker.get("shortVolume") or live_short)
@@ -372,7 +337,6 @@ def process_sentiment_matrix():
             session_long_delta[quote] += (live_short - b_short)
             session_short_delta[quote] += (live_long - b_long)
 
-            # 2. Cumulative 24H Daily Deltas (5 PM NY Close Reference)
             daily_marker = daily_baseline_volumes.get(name, {})
             d_long = float(daily_marker.get("longVolume") or live_long)
             d_short = float(daily_marker.get("shortVolume") or live_short)
@@ -406,7 +370,6 @@ def process_sentiment_matrix():
         else: d_status_str = "UP" if inv_long_ratio >= 0.5 else "DOWN"
         daily_currency_scores[cur] = {"currency": display_name, "value": abs(d_formatted_score), "status": d_status_str}
     
-    # --- DIRECTIONAL SORTING ---
     top_4_up = [x for x in sorted(list(currency_scores.values()), key=lambda x: x['value'], reverse=True) if x['status'] == "UP"]
     bottom_4_down = [x for x in sorted(list(currency_scores.values()), key=lambda x: x['value'], reverse=False) if x['status'] == "DOWN"]
 
@@ -426,7 +389,7 @@ def process_sentiment_matrix():
     pending_label = stored_baseline.get("pending_session")
     buffer_status = None
     if pending_label and pending_label != active_session_label:
-        buffer_status = f"Caching new session baseline for {pending_label} (Gathered blocks: {stored_baseline.get('transition_counter', 0)}/3). Current matrix below remains fully live!"
+        buffer_status = f"Caching new session baseline for {pending_label} (Gathered blocks: {stored_baseline.get('transition_counter', 0)}/3)."
 
     return {
         "top_4_up": top_4_up,
@@ -493,9 +456,7 @@ DASHBOARD_HTML = """
     <div class="container">
         <div class="header">
             <div>
-                <div style="display: flex; align-items: center;">
-                    <h1>Oanda Sentiment Matrix Terminal</h1>
-                </div>
+                <h1>Oanda Sentiment Matrix Terminal</h1>
                 <div style="color: #64748b; font-size: 12px; margin-top: 5px;">Active Anchor: <span style="color:#a5b4fc; font-weight:600;">{{ data.baseline_set_at }}</span></div>
             </div>
             <div class="timestamp" style="font-size: 12px; color: #64748b; text-align: right;">
@@ -520,7 +481,7 @@ DASHBOARD_HTML = """
             <div class="panel">
                 <h2>Cumulative 24H Daily Sentiment Matrix (5:00 PM Anchor)</h2>
                 <div class="velocity-row-container">
-                    <div class="velocity-sub-heading">Daily Sentiment Up (Highest Value First)</div>
+                    <div class="velocity-sub-heading">Daily Sentiment Up</div>
                     <div class="grid-row">
                         {% for item in data.daily_top_4_up %}
                         <div class="grid-box border-up">
@@ -531,7 +492,7 @@ DASHBOARD_HTML = """
                         {% endfor %}
                     </div>
                     
-                    <div class="velocity-sub-heading" style="margin-top: 10px;">Daily Sentiment Down (Lowest Value First)</div>
+                    <div class="velocity-sub-heading" style="margin-top: 10px;">Daily Sentiment Down</div>
                     <div class="grid-row">
                         {% for item in data.daily_bottom_4_down %}
                         <div class="grid-box border-down">
@@ -548,7 +509,7 @@ DASHBOARD_HTML = """
                 <div class="panel">
                     <h2>Active Session Value Shifts (Ranked Quantities)</h2>
                     <div class="velocity-row-container">
-                        <div class="velocity-sub-heading">Sentiment Up (Highest Value First)</div>
+                        <div class="velocity-sub-heading">Sentiment Up</div>
                         <div class="grid-row">
                             {% for item in data.top_4_up %}
                             <div class="grid-box border-up">
@@ -559,7 +520,7 @@ DASHBOARD_HTML = """
                             {% endfor %}
                         </div>
                         
-                        <div class="velocity-sub-heading" style="margin-top: 10px;">Sentiment Down (Lowest Value First)</div>
+                        <div class="velocity-sub-heading" style="margin-top: 10px;">Sentiment Down</div>
                         <div class="grid-row">
                             {% for item in data.bottom_4_down %}
                             <div class="grid-box border-down">
@@ -591,7 +552,7 @@ DASHBOARD_HTML = """
         </div>
 
         <div class="footer-note">
-            <strong>System Synchronization:</strong> Compares background Oanda position book retail volumes across continuous trading sessions. The matrix balances and recalibrates metrics daily at 5:00 PM NY to preserve trend accuracy across macro cycles.
+            <strong>System Synchronization:</strong> Compares background Oanda position book retail volumes across continuous trading sessions.
         </div>
     </div>
 
@@ -601,6 +562,43 @@ DASHBOARD_HTML = """
 </body>
 </html>
 """
+
+# --- NEW DIAGNOSTIC DEBUG ROUTE ---
+@app.route('/debug')
+def debug_oanda():
+    """Instantly checks connection to Oanda API to output key authentication details."""
+    test_pair = "EURUSD"
+    oanda_symbol = OANDA_SYMBOL_MAP.get(test_pair, "EUR_USD")
+    url = f"{OANDA_URL}/v3/instruments/{oanda_symbol}/positionBook"
+    
+    headers = {
+        "Authorization": f"Bearer {OANDA_API_KEY}",
+        "Content-Type": "application/json"
+    }
+    
+    masked_key = "NOT_SET"
+    if OANDA_API_KEY:
+        masked_key = OANDA_API_KEY[:4] + "..." + OANDA_API_KEY[-4:] if len(OANDA_API_KEY) > 8 else "PRESENT_BUT_SHORT"
+        
+    debug_info = {
+        "configured_oanda_url": OANDA_URL,
+        "api_key_status": masked_key,
+        "account_id_status": OANDA_ACCOUNT_ID if OANDA_ACCOUNT_ID else "NOT_SET",
+        "testing_endpoint": url,
+        "timestamp_local": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    }
+    
+    try:
+        response = requests.get(url, headers=headers, timeout=10)
+        debug_info["http_status"] = response.status_code
+        try:
+            debug_info["raw_response"] = response.json()
+        except Exception:
+            debug_info["raw_response"] = response.text
+    except Exception as e:
+        debug_info["connection_error"] = str(e)
+        
+    return jsonify(debug_info)
 
 bg_thread = threading.Thread(target=run_background_state_scheduler, daemon=True)
 bg_thread.start()
@@ -613,14 +611,11 @@ def index():
     except Exception as e:
         return jsonify({"error": True, "message": f"Processing Runtime Failure: {str(e)}"}), 500
 
-# --- AUTOMATED MT4 BRIDGE API ENDPOINT ---
 @app.route('/api/mt4_signals')
 def mt4_signals():
     try:
         matrix = process_sentiment_matrix()
         ny_now = get_ny_time()
-        
-        # Daily state is omitted to maintain structural compatibility with your MT4 indicator configurations
         daily_status = "N/A"
             
         bias_list = matrix.get('absolute_bias', [])
