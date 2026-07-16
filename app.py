@@ -24,16 +24,17 @@ baseline_collection = db["session_baselines"]
 daily_baseline_collection = db["daily_baselines"]
 cache_collection = db["api_cache"]
 
-# --- OANDA INSTRUMENT CONFIGURATION & MAPPING (ALL 28 PAIRS) ---
+# --- OANDA INSTRUMENT CONFIGURATION & MAPPING ---
+# ONLY include pairs that you know your account supports. 
+# If you get a 400 error for a pair, remove it from this list.
 OANDA_SYMBOL_MAP = {
-    "EURUSD": "EUR_USD", "GBPUSD": "GBP_USD", "AUDUSD": "AUD_USD", "NZDUSD": "NZD_USD",
-    "USDCHF": "USD_CHF", "USDCAD": "USD_CAD", "USDJPY": "USD_JPY",
-    "EURGBP": "EUR_GBP", "EURAUD": "EUR_AUD", "EURNZD": "EUR_NZD", "EURCAD": "EUR_CAD", "EURCHF": "EUR_CHF", "EURJPY": "EUR_JPY",
-    "GBPAUD": "GBP_AUD", "GBPNZD": "GBP_NZD", "GBPCAD": "GBP_CAD", "GBPCHF": "GBP_CHF", "GBPJPY": "GBP_JPY",
-    "AUDNZD": "AUD_NZD", "AUDCAD": "AUD_CAD", "AUDCHF": "AUD_CHF", "AUDJPY": "AUD_JPY",
-    "NZDCAD": "NZD_CAD", "NZDCHF": "NZD_CHF", "NZDJPY": "NZD_JPY",
-    "CADCHF": "CAD_CHF", "CADJPY": "CAD_JPY",
-    "CHFJPY": "CHF_JPY",
+    "EURUSD": "EUR_USD", 
+    "GBPUSD": "GBP_USD", 
+    "AUDUSD": "AUD_USD", 
+    "NZDUSD": "NZD_USD",
+    "USDCHF": "USD_CHF", 
+    "USDCAD": "USD_CAD", 
+    "USDJPY": "USD_JPY",
     "XAUUSD": "XAU_USD"
 }
 
