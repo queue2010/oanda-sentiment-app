@@ -1,0 +1,6 @@
+Flask
+requests
+yfinance
+pymongo
+dnspython
+cloudscraper
