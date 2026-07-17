@@ -87,9 +87,9 @@ def run_background_state_scheduler():
     while True:
         try:
             ny_now = get_ny_time()
-            current_date_str = ny_now.strftime("%Y-%m-%d")
             current_session_label, session_anchor_hour = get_current_session_details(ny_now)
             
+            # Fetch Data
             symbols = {}
             with concurrent.futures.ThreadPoolExecutor(max_workers=10) as exe:
                 futures = {exe.submit(fetch_oanda, p, s): p for p, s in OANDA_SYMBOL_MAP.items()}
@@ -104,42 +104,18 @@ def run_background_state_scheduler():
                     "live_pairs": symbols
                 }, upsert=True)
             
-            cached_data = load_db_document(cache_collection)
-            live_pairs = cached_data.get("live_pairs", {})
-            clean_live_pairs = {str(k): v for k, v in live_pairs.items()}
-
-            if clean_live_pairs:
-                stored_baseline = load_db_document(baseline_collection)
-                session_did_change = (
-                    not stored_baseline or 
-                    (stored_baseline.get("active_session") != current_session_label and stored_baseline.get("pending_session") != current_session_label)
-                )
-
-                if session_did_change:
-                    fresh_volumes = {k: {"long": float(v.get("long", 0)), "short": float(v.get("short", 0))} for k, v in clean_live_pairs.items()}
-                    updated_baseline = dict(stored_baseline) if stored_baseline else {}
-                    updated_baseline.update({
-                        "pending_session": current_session_label, "pending_date": current_date_str,
-                        "pending_anchor_hour": session_anchor_hour, "pending_volumes": fresh_volumes, "transition_counter": 1
-                    })
-                    save_db_document(baseline_collection, updated_baseline)
-                elif stored_baseline.get("pending_session"):
-                    current_count = stored_baseline.get("transition_counter", 0) + 1
-                    if current_count >= 3:
-                        stored_baseline = {
-                            "baseline_date": stored_baseline.get("pending_date"), "active_session": stored_baseline.get("pending_session"),
-                            "anchor_hour": stored_baseline.get("pending_anchor_hour"), "volumes": stored_baseline.get("pending_volumes")
-                        }
-                        save_db_document(baseline_collection, stored_baseline)
-                    else:
-                        baseline_collection.update_one({"_id": "state_doc"}, {"$set": {"transition_counter": current_count}})
-
-                stored_daily_baseline = load_db_document(daily_baseline_collection, "daily_state_doc")
-                current_daily_anchor_date = ny_now.strftime("%Y-%m-%d") if ny_now.hour >= 17 else (ny_now - datetime.timedelta(days=1)).strftime("%Y-%m-%d")
-                
-                if not stored_daily_baseline or stored_daily_baseline.get("daily_anchor_date") != current_daily_anchor_date:
-                    fresh_daily_volumes = {k: {"long": float(v.get("long", 0)), "short": float(v.get("short", 0))} for k, v in clean_live_pairs.items()}
-                    save_db_document(daily_baseline_collection, {"daily_anchor_date": current_daily_anchor_date, "volumes": fresh_daily_volumes, "captured_at": ny_now.strftime("%Y-%m-%d %H:%M:%S")}, "daily_state_doc")
+            # Daily Anchor Logic
+            stored_daily_baseline = load_db_document(daily_baseline_collection, "daily_state_doc")
+            current_daily_anchor_date = ny_now.strftime("%Y-%m-%d") if ny_now.hour >= 17 else (ny_now - datetime.timedelta(days=1)).strftime("%Y-%m-%d")
+            
+            # Save baseline only if missing or date shifted
+            if not stored_daily_baseline or stored_daily_baseline.get("daily_anchor_date") != current_daily_anchor_date:
+                if symbols:
+                    save_db_document(daily_baseline_collection, {
+                        "daily_anchor_date": current_daily_anchor_date, 
+                        "volumes": symbols, 
+                        "captured_at": ny_now.strftime("%Y-%m-%d %H:%M:%S")
+                    }, "daily_state_doc")
 
         except Exception as e:
             print(f"Loop Error: {str(e)}")
@@ -169,17 +145,16 @@ def process_sentiment_matrix():
         l_long, l_short = float(live.get("long", 0)), float(live.get("short", 0))
         total_live = l_long + l_short
         
+        # Calculate Delta Logic
         if cleaned_name == "xauusd":
             if total_live > 0: abs_long_pct_sum["GOLD"] = (l_long / total_live)
             abs_pair_counts["GOLD"] = 1
-            b_long = float(baseline_volumes.get(name, {}).get("long") or l_long)
-            b_short = float(baseline_volumes.get(name, {}).get("short") or l_short)
-            sess_long_delta["GOLD"] = (l_long - b_long)
-            sess_short_delta["GOLD"] = (l_short - b_short)
-            d_long = float(daily_baseline_volumes.get(name, {}).get("long") or l_long)
-            d_short = float(daily_baseline_volumes.get(name, {}).get("short") or l_short)
-            daily_long_delta["GOLD"] = (l_long - d_long)
-            daily_short_delta["GOLD"] = (l_short - d_short)
+            b_val = baseline_volumes.get(name, {})
+            sess_long_delta["GOLD"] = (l_long - float(b_val.get("long", l_long)))
+            sess_short_delta["GOLD"] = (l_short - float(b_val.get("short", l_short)))
+            d_val = daily_baseline_volumes.get(name, {})
+            daily_long_delta["GOLD"] = (l_long - float(d_val.get("long", l_long)))
+            daily_short_delta["GOLD"] = (l_short - float(d_val.get("short", l_short)))
             continue
             
         if len(cleaned_name) != 6: continue
@@ -190,15 +165,13 @@ def process_sentiment_matrix():
                 abs_long_pct_sum[base] += (l_long / total_live); abs_pair_counts[base] += 1
                 abs_long_pct_sum[quote] += (l_short / total_live); abs_pair_counts[quote] += 1
             
-            b_long = float(baseline_volumes.get(name, {}).get("long") or l_long)
-            b_short = float(baseline_volumes.get(name, {}).get("short") or l_short)
-            sess_long_delta[base] += (l_long - b_long); sess_short_delta[base] += (l_short - b_short)
-            sess_long_delta[quote] += (l_short - b_short); sess_short_delta[quote] += (l_long - b_long)
+            b_val = baseline_volumes.get(name, {})
+            sess_long_delta[base] += (l_long - float(b_val.get("long", l_long))); sess_short_delta[base] += (l_short - float(b_val.get("short", l_short)))
+            sess_long_delta[quote] += (l_short - float(b_val.get("short", l_short))); sess_short_delta[quote] += (l_long - float(b_val.get("long", l_long)))
 
-            d_long = float(daily_baseline_volumes.get(name, {}).get("long") or l_long)
-            d_short = float(daily_baseline_volumes.get(name, {}).get("short") or l_short)
-            daily_long_delta[base] += (l_long - d_long); daily_short_delta[base] += (l_short - d_short)
-            daily_long_delta[quote] += (l_short - d_short); daily_short_delta[quote] += (l_long - d_long)
+            d_val = daily_baseline_volumes.get(name, {})
+            daily_long_delta[base] += (l_long - float(d_val.get("long", l_long))); daily_short_delta[base] += (l_short - float(d_val.get("short", l_short)))
+            daily_long_delta[quote] += (l_short - float(d_val.get("short", l_short))); daily_short_delta[quote] += (l_long - float(d_val.get("long", l_long)))
 
     currency_scores, daily_currency_scores, bias_output = {}, {}, []
     
@@ -206,7 +179,6 @@ def process_sentiment_matrix():
         count = abs_pair_counts[cur]
         inv_long_ratio = (abs_long_pct_sum[cur] / count) if count > 0 else 0.5
         display_name = "Gold" if cur == "GOLD" else cur
-        
         bias_output.append({"currency": display_name, "long_pct": round(inv_long_ratio * 100, 1), "bias_label": "BULLISH" if inv_long_ratio >= 0.5 else "BEARISH"})
 
         net_shift = (sess_long_delta[cur] - sess_short_delta[cur]) * SCALE_FACTOR
@@ -226,7 +198,7 @@ def process_sentiment_matrix():
         "daily_bottom_4_down": [x for x in sorted(list(daily_currency_scores.values()), key=lambda x: x['value'], reverse=False) if x['status'] == "DOWN"],
         "absolute_bias": sorted(bias_output, key=lambda x: x['long_pct'], reverse=True),
         "ny_time": ny_now.strftime("%I:%M:%S %p"), "api_sync_time": cached_data.get("last_fetch_time", "Syncing..."),
-        "active_session": stored_baseline.get("active_session", "INIT"),
+        "active_session": get_current_session_details(ny_now)[0],
         "baseline_set_at": f"{stored_baseline.get('active_session')} Open ({stored_baseline.get('anchor_hour')}:00 NY)" if stored_baseline.get('active_session') else "Init"
     }
 
