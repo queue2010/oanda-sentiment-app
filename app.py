@@ -134,7 +134,6 @@ def run_background_state_scheduler():
                     else:
                         baseline_collection.update_one({"_id": "state_doc"}, {"$set": {"transition_counter": current_count}})
 
-                # Daily Anchor logic
                 stored_daily_baseline = load_db_document(daily_baseline_collection, "daily_state_doc")
                 current_daily_anchor_date = ny_now.strftime("%Y-%m-%d") if ny_now.hour >= 17 else (ny_now - datetime.timedelta(days=1)).strftime("%Y-%m-%d")
                 
@@ -147,8 +146,6 @@ def run_background_state_scheduler():
         time.sleep(60)
 
 def process_sentiment_matrix():
-    # --- VOLUME SCALING CONFIGURATION ---
-    # Multiplier to convert Oanda percentages into "Volume Units"
     SCALE_FACTOR = 1000 
     
     ny_now = get_ny_time()
@@ -162,7 +159,6 @@ def process_sentiment_matrix():
     majors = ["EUR", "GBP", "USD", "AUD", "NZD", "CAD", "CHF", "JPY"]
     tracked_assets = majors + ["GOLD"]
     
-    # Init storage
     abs_long_pct_sum = {asset: 0.0 for asset in tracked_assets}
     abs_pair_counts = {asset: 0 for asset in tracked_assets}
     sess_long_delta, sess_short_delta = {a: 0.0 for a in tracked_assets}, {a: 0.0 for a in tracked_assets}
@@ -173,7 +169,6 @@ def process_sentiment_matrix():
         l_long, l_short = float(live.get("long", 0)), float(live.get("short", 0))
         total_live = l_long + l_short
         
-        # Gold Logic
         if cleaned_name == "xauusd":
             if total_live > 0: abs_long_pct_sum["GOLD"] = (l_long / total_live)
             abs_pair_counts["GOLD"] = 1
@@ -195,26 +190,27 @@ def process_sentiment_matrix():
                 abs_long_pct_sum[base] += (l_long / total_live); abs_pair_counts[base] += 1
                 abs_long_pct_sum[quote] += (l_short / total_live); abs_pair_counts[quote] += 1
             
-            # Session Delta
             b_long = float(baseline_volumes.get(name, {}).get("long") or l_long)
             b_short = float(baseline_volumes.get(name, {}).get("short") or l_short)
             sess_long_delta[base] += (l_long - b_long); sess_short_delta[base] += (l_short - b_short)
             sess_long_delta[quote] += (l_short - b_short); sess_short_delta[quote] += (l_long - b_long)
 
-            # Daily Delta
             d_long = float(daily_baseline_volumes.get(name, {}).get("long") or l_long)
             d_short = float(daily_baseline_volumes.get(name, {}).get("short") or l_short)
             daily_long_delta[base] += (l_long - d_long); daily_short_delta[base] += (l_short - d_short)
             daily_long_delta[quote] += (l_short - d_short); daily_short_delta[quote] += (l_long - d_long)
 
-    currency_scores, daily_currency_scores = {}, {}
+    currency_scores, daily_currency_scores, bias_output = {}, {}, []
     
     for cur in tracked_assets:
         count = abs_pair_counts[cur]
         inv_long_ratio = (abs_long_pct_sum[cur] / count) if count > 0 else 0.5
         display_name = "Gold" if cur == "GOLD" else cur
+        
+        # Bias Output
+        bias_output.append({"currency": display_name, "long_pct": round(inv_long_ratio * 100, 1), "bias_label": "BULLISH" if inv_long_ratio >= 0.5 else "BEARISH"})
 
-        # Apply SCALE_FACTOR to volume delta
+        # Scaling
         net_shift = (sess_long_delta[cur] - sess_short_delta[cur]) * SCALE_FACTOR
         formatted_score = int(round(net_shift, 0))
         status_str = "UP" if formatted_score > 0 else ("DOWN" if formatted_score < 0 else ("UP" if inv_long_ratio >= 0.5 else "DOWN"))
@@ -225,27 +221,17 @@ def process_sentiment_matrix():
         d_status_str = "UP" if d_formatted_score > 0 else ("DOWN" if d_formatted_score < 0 else ("UP" if inv_long_ratio >= 0.5 else "DOWN"))
         daily_currency_scores[cur] = {"currency": display_name, "value": abs(d_formatted_score), "status": d_status_str}
     
-    # Sort
-    top_4_up = [x for x in sorted(list(currency_scores.values()), key=lambda x: x['value'], reverse=True) if x['status'] == "UP"]
-    bottom_4_down = [x for x in sorted(list(currency_scores.values()), key=lambda x: x['value'], reverse=False) if x['status'] == "DOWN"]
-    d_top_4_up = [x for x in sorted(list(daily_currency_scores.values()), key=lambda x: x['value'], reverse=True) if x['status'] == "UP"]
-    d_bottom_4_down = [x for x in sorted(list(daily_currency_scores.values()), key=lambda x: x['value'], reverse=False) if x['status'] == "DOWN"]
-
-    bias_output = []
-    for cur in tracked_assets:
-        count = abs_pair_counts[cur]
-        long_pct = round((abs_long_pct_sum[cur] / count) * 100, 1) if count > 0 else 50.0
-        bias_output.append({"currency": ("Gold" if cur == "GOLD" else cur), "long_pct": long_pct, "bias_label": "BULLISH" if long_pct >= 50.0 else "BEARISH"})
-    
     return {
-        "top_4_up": top_4_up, "bottom_4_down": bottom_4_down, "daily_top_4_up": d_top_4_up, "daily_bottom_4_down": d_bottom_4_down,
+        "top_4_up": [x for x in sorted(list(currency_scores.values()), key=lambda x: x['value'], reverse=True) if x['status'] == "UP"],
+        "bottom_4_down": [x for x in sorted(list(currency_scores.values()), key=lambda x: x['value'], reverse=False) if x['status'] == "DOWN"],
+        "daily_top_4_up": [x for x in sorted(list(daily_currency_scores.values()), key=lambda x: x['value'], reverse=True) if x['status'] == "UP"],
+        "daily_bottom_4_down": [x for x in sorted(list(daily_currency_scores.values()), key=lambda x: x['value'], reverse=False) if x['status'] == "DOWN"],
         "absolute_bias": sorted(bias_output, key=lambda x: x['long_pct'], reverse=True),
         "ny_time": ny_now.strftime("%I:%M:%S %p"), "api_sync_time": cached_data.get("last_fetch_time", "Syncing..."),
         "active_session": stored_baseline.get("active_session", "INIT"),
         "baseline_set_at": f"{stored_baseline.get('active_session')} Open ({stored_baseline.get('anchor_hour')}:00 NY)" if stored_baseline.get('active_session') else "Init"
     }
 
-# --- DASHBOARD HTML (No changes required, logic handled in python) ---
 DASHBOARD_HTML = """
 <!DOCTYPE html>
 <html lang="en">
@@ -259,10 +245,7 @@ DASHBOARD_HTML = """
         .header { display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #1e293b; padding-bottom: 15px; margin-bottom: 25px; }
         h1 { margin: 0; font-size: 22px; color: #38bdf8; font-weight: 700; }
         h2 { font-size: 13px; color: #94a3b8; margin-bottom: 15px; text-transform: uppercase; }
-        .session-tracker-bar { display: flex; gap: 10px; margin-bottom: 25px; }
-        .session-card { flex: 1; padding: 12px; border-radius: 8px; text-align: center; font-size: 12px; font-weight: 700; background-color: #111827; border: 1px solid #1f2937; color: #475569; }
-        .active-session-live { background-color: #1e1b4b; border: 2px solid #6366f1; color: #818cf8; }
-        .section-split { display: flex; flex-direction: row; gap: 25px; width: 100%; }
+        .section-split { display: flex; flex-direction: row; gap: 25px; width: 100%; align-items: flex-start; }
         .panel { background-color: #111827; border: 1px solid #1f1f23; border-radius: 10px; padding: 20px; flex: 1; }
         .right-column-stack { flex: 1; display: flex; flex-direction: column; gap: 25px; }
         .grid-row { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; }
@@ -295,6 +278,19 @@ DASHBOARD_HTML = """
                     <h2>Active Session Value Shifts</h2>
                     <div class="grid-row">{% for item in data.top_4_up %}<div class="grid-box border-up"><span class="currency-txt">{{ item.currency }}</span><span class="value-box" style="color: #10b981;">{{ item.value }}</span><span class="badge" style="color:#10b981;">UP</span></div>{% endfor %}</div>
                     <div class="grid-row" style="margin-top:10px;">{% for item in data.bottom_4_down %}<div class="grid-box border-down"><span class="currency-txt">{{ item.currency }}</span><span class="value-box" style="color: #ef4444;">{{ item.value }}</span><span class="badge" style="color:#ef4444;">DOWN</span></div>{% endfor %}</div>
+                </div>
+                <div class="panel">
+                    <h2>Absolute Retail Positioning Bias (Total Inventory)</h2>
+                    <div class="bias-list">
+                        {% for item in data.absolute_bias %}
+                        <div class="data-row">
+                            <span class="currency-txt" style="min-width: 50px;">{{ item.currency }}</span>
+                            <span style="font-size: 14px; color: #f1f5f9; margin-right: 10px; min-width: 45px; text-align: right;">{{ item.long_pct }}%</span>
+                            <div class="bar-container"><div class="bar-fill" style="width: {{ item.long_pct }}%; background-color: {% if item.long_pct >= 50.0 %}#38bdf8{% else %}#f59e0b{% endif %};"></div></div>
+                            <span class="badge" style="margin-left: 10px; background: rgba(56, 189, 248, 0.1); color: #38bdf8;">{{ item.bias_label }}</span>
+                        </div>
+                        {% endfor %}
+                    </div>
                 </div>
             </div>
         </div>
