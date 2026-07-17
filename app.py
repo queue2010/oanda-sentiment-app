@@ -272,7 +272,7 @@ DASHBOARD_HTML = """
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Macro Sentiment Matrix Terminal</title>
+    <title>Oanda Sentiment Matrix Terminal</title>
     <style>
         body { background-color: #0b0e14; color: #e2e8f0; font-family: -apple-system, sans-serif; margin: 0; padding: 25px; }
         .container { max-width: 1300px; margin: 0 auto; }
