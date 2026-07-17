@@ -95,6 +95,7 @@ def run_background_state_scheduler():
     while True:
         try:
             ny_now = get_ny_time()
+            current_date_str = ny_now.strftime("%Y-%m-%d")
             current_session_label, session_anchor_hour = get_current_session_details(ny_now)
             
             # Fetch Data
@@ -111,6 +112,50 @@ def run_background_state_scheduler():
                     "last_fetch_time": ny_now.strftime("%Y-%m-%d %H:%M:%S"),
                     "live_pairs": symbols
                 }, upsert=True)
+
+            # --- SESSION BASELINE DUAL-TRACKING CALIBRATION (mirrors MyFXBook logic) ---
+            # Without this block, baseline_collection is never written, so every
+            # session delta calculated in process_sentiment_matrix() falls back to
+            # the live value itself and is always exactly zero.
+            stored_baseline = load_db_document(baseline_collection)
+
+            session_did_change = (
+                not stored_baseline or
+                (stored_baseline.get("active_session") != current_session_label and
+                 stored_baseline.get("pending_session") != current_session_label)
+            )
+
+            if session_did_change and symbols:
+                updated_baseline = dict(stored_baseline) if stored_baseline else {}
+                updated_baseline.update({
+                    "pending_session": current_session_label,
+                    "pending_date": current_date_str,
+                    "pending_anchor_hour": session_anchor_hour,
+                    "pending_volumes": symbols,
+                    "transition_counter": 1
+                })
+                save_db_document(baseline_collection, updated_baseline)
+                stored_baseline = updated_baseline
+                print(f"Handoff Log: Staging baseline sequence initiated for {current_session_label}. Reading 1/3 secured.")
+
+            elif stored_baseline.get("pending_session") and symbols:
+                current_count = stored_baseline.get("transition_counter", 0) + 1
+                print(f"Handoff Log: Incremented update block {current_count}/3 for {stored_baseline.get('pending_session')}")
+
+                if current_count >= 3:
+                    stored_baseline = {
+                        "baseline_date": stored_baseline.get("pending_date"),
+                        "active_session": stored_baseline.get("pending_session"),
+                        "anchor_hour": stored_baseline.get("pending_anchor_hour"),
+                        "volumes": stored_baseline.get("pending_volumes")
+                    }
+                    save_db_document(baseline_collection, stored_baseline)
+                    print(f"Handoff Complete: Safely hot-swapped session view over to: {stored_baseline.get('active_session')}")
+                else:
+                    baseline_collection.update_one(
+                        {"_id": "state_doc"},
+                        {"$set": {"transition_counter": current_count}}
+                    )
             
             # Daily Anchor Logic
             stored_daily_baseline = load_db_document(daily_baseline_collection, "daily_state_doc")
@@ -166,8 +211,9 @@ def process_sentiment_matrix():
         
         # Calculate Delta Logic
         if cleaned_name == "xauusd":
-            if total_live > 0: abs_long_pct_sum["GOLD"] = (l_long / total_live)
-            abs_pair_counts["GOLD"] = 1
+            if total_live > 0:
+                abs_long_pct_sum["GOLD"] = (l_long / total_live)
+                abs_pair_counts["GOLD"] = 1
             sess_long_delta["GOLD"] = (l_long - b_long)
             sess_short_delta["GOLD"] = (l_short - b_short)
             daily_long_delta["GOLD"] = (l_long - d_long)
