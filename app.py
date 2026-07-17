@@ -108,7 +108,6 @@ def run_background_state_scheduler():
             stored_daily_baseline = load_db_document(daily_baseline_collection, "daily_state_doc")
             current_daily_anchor_date = ny_now.strftime("%Y-%m-%d") if ny_now.hour >= 17 else (ny_now - datetime.timedelta(days=1)).strftime("%Y-%m-%d")
             
-            # Save baseline only if missing or date shifted
             if not stored_daily_baseline or stored_daily_baseline.get("daily_anchor_date") != current_daily_anchor_date:
                 if symbols:
                     save_db_document(daily_baseline_collection, {
@@ -145,16 +144,22 @@ def process_sentiment_matrix():
         l_long, l_short = float(live.get("long", 0)), float(live.get("short", 0))
         total_live = l_long + l_short
         
+        # Get baseline volumes
+        b_val = baseline_volumes.get(name, {})
+        d_val = daily_baseline_volumes.get(name, {})
+        
+        # --- FIXED EXTRACTION KEYS ---
+        d_long = float(d_val.get("longVolume", l_long))
+        d_short = float(d_val.get("shortVolume", l_short))
+        
         # Calculate Delta Logic
         if cleaned_name == "xauusd":
             if total_live > 0: abs_long_pct_sum["GOLD"] = (l_long / total_live)
             abs_pair_counts["GOLD"] = 1
-            b_val = baseline_volumes.get(name, {})
             sess_long_delta["GOLD"] = (l_long - float(b_val.get("long", l_long)))
             sess_short_delta["GOLD"] = (l_short - float(b_val.get("short", l_short)))
-            d_val = daily_baseline_volumes.get(name, {})
-            daily_long_delta["GOLD"] = (l_long - float(d_val.get("long", l_long)))
-            daily_short_delta["GOLD"] = (l_short - float(d_val.get("short", l_short)))
+            daily_long_delta["GOLD"] = (l_long - d_long)
+            daily_short_delta["GOLD"] = (l_short - d_short)
             continue
             
         if len(cleaned_name) != 6: continue
@@ -165,14 +170,15 @@ def process_sentiment_matrix():
                 abs_long_pct_sum[base] += (l_long / total_live); abs_pair_counts[base] += 1
                 abs_long_pct_sum[quote] += (l_short / total_live); abs_pair_counts[quote] += 1
             
-            b_val = baseline_volumes.get(name, {})
+            # Session Delta
             sess_long_delta[base] += (l_long - float(b_val.get("long", l_long))); sess_short_delta[base] += (l_short - float(b_val.get("short", l_short)))
             sess_long_delta[quote] += (l_short - float(b_val.get("short", l_short))); sess_short_delta[quote] += (l_long - float(b_val.get("long", l_long)))
 
-            d_val = daily_baseline_volumes.get(name, {})
-            daily_long_delta[base] += (l_long - float(d_val.get("long", l_long))); daily_short_delta[base] += (l_short - float(d_val.get("short", l_short)))
-            daily_long_delta[quote] += (l_short - float(d_val.get("short", l_short))); daily_short_delta[quote] += (l_long - float(d_val.get("long", l_long)))
+            # Daily Delta (using fixed d_long/d_short)
+            daily_long_delta[base] += (l_long - d_long); daily_short_delta[base] += (l_short - d_short)
+            daily_long_delta[quote] += (l_short - d_short); daily_short_delta[quote] += (l_long - d_long)
 
+    # --- FORMATTING OUTPUT ---
     currency_scores, daily_currency_scores, bias_output = {}, {}, []
     
     for cur in tracked_assets:
