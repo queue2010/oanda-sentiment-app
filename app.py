@@ -29,6 +29,14 @@ OANDA_SYMBOL_MAP = {
     "USDJPY": "USD_JPY", "XAUUSD": "XAU_USD"
 }
 
+# --- HELPER: SCHEMA-AGNOSTIC DATA RETRIEVAL ---
+def get_safe_volume(data_dict, primary_key, secondary_key, fallback_value):
+    """Retrieves volume data regardless of key naming schema (long/longVolume)."""
+    val = data_dict.get(primary_key)
+    if val is None:
+        val = data_dict.get(secondary_key)
+    return float(val) if val is not None else float(fallback_value)
+
 # --- THREADING ENGINE ---
 background_engine_thread = None
 
@@ -144,20 +152,24 @@ def process_sentiment_matrix():
         l_long, l_short = float(live.get("long", 0)), float(live.get("short", 0))
         total_live = l_long + l_short
         
-        # Get baseline volumes
+        # --- FIXED EXTRACTION KEYS USING HELPER ---
         b_val = baseline_volumes.get(name, {})
         d_val = daily_baseline_volumes.get(name, {})
         
-        # --- FIXED EXTRACTION KEYS ---
-        d_long = float(d_val.get("longVolume", l_long))
-        d_short = float(d_val.get("shortVolume", l_short))
+        # Session baseline uses "long"/"short"
+        b_long = get_safe_volume(b_val, "long", "longVolume", l_long)
+        b_short = get_safe_volume(b_val, "short", "shortVolume", l_short)
+        
+        # Daily baseline uses "longVolume"/"shortVolume"
+        d_long = get_safe_volume(d_val, "longVolume", "long", l_long)
+        d_short = get_safe_volume(d_val, "shortVolume", "short", l_short)
         
         # Calculate Delta Logic
         if cleaned_name == "xauusd":
             if total_live > 0: abs_long_pct_sum["GOLD"] = (l_long / total_live)
             abs_pair_counts["GOLD"] = 1
-            sess_long_delta["GOLD"] = (l_long - float(b_val.get("long", l_long)))
-            sess_short_delta["GOLD"] = (l_short - float(b_val.get("short", l_short)))
+            sess_long_delta["GOLD"] = (l_long - b_long)
+            sess_short_delta["GOLD"] = (l_short - b_short)
             daily_long_delta["GOLD"] = (l_long - d_long)
             daily_short_delta["GOLD"] = (l_short - d_short)
             continue
@@ -171,10 +183,10 @@ def process_sentiment_matrix():
                 abs_long_pct_sum[quote] += (l_short / total_live); abs_pair_counts[quote] += 1
             
             # Session Delta
-            sess_long_delta[base] += (l_long - float(b_val.get("long", l_long))); sess_short_delta[base] += (l_short - float(b_val.get("short", l_short)))
-            sess_long_delta[quote] += (l_short - float(b_val.get("short", l_short))); sess_short_delta[quote] += (l_long - float(b_val.get("long", l_long)))
+            sess_long_delta[base] += (l_long - b_long); sess_short_delta[base] += (l_short - b_short)
+            sess_long_delta[quote] += (l_short - b_short); sess_short_delta[quote] += (l_long - b_long)
 
-            # Daily Delta (using fixed d_long/d_short)
+            # Daily Delta
             daily_long_delta[base] += (l_long - d_long); daily_short_delta[base] += (l_short - d_short)
             daily_long_delta[quote] += (l_short - d_short); daily_short_delta[quote] += (l_long - d_long)
 
