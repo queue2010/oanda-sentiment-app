@@ -301,7 +301,7 @@ DASHBOARD_HTML = """
 <body>
     <div class="container">
         <div class="header">
-            <div><h1>Macro Sentiment Matrix Terminal</h1><div style="font-size: 12px; color: #64748b;">Active Anchor: {{ data.baseline_set_at }}</div></div>
+            <div><h1>Oanda Sentiment Matrix Terminal</h1><div style="font-size: 12px; color: #64748b;">Active Anchor: {{ data.baseline_set_at }}</div></div>
             <div style="text-align: right; font-size: 12px; color: #64748b;">Sync: {{ data.api_sync_time }}<br>NY Time: {{ data.ny_time }}</div>
         </div>
         
