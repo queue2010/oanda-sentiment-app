@@ -207,10 +207,8 @@ def process_sentiment_matrix():
         inv_long_ratio = (abs_long_pct_sum[cur] / count) if count > 0 else 0.5
         display_name = "Gold" if cur == "GOLD" else cur
         
-        # Bias Output
         bias_output.append({"currency": display_name, "long_pct": round(inv_long_ratio * 100, 1), "bias_label": "BULLISH" if inv_long_ratio >= 0.5 else "BEARISH"})
 
-        # Scaling
         net_shift = (sess_long_delta[cur] - sess_short_delta[cur]) * SCALE_FACTOR
         formatted_score = int(round(net_shift, 0))
         status_str = "UP" if formatted_score > 0 else ("DOWN" if formatted_score < 0 else ("UP" if inv_long_ratio >= 0.5 else "DOWN"))
@@ -245,6 +243,9 @@ DASHBOARD_HTML = """
         .header { display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #1e293b; padding-bottom: 15px; margin-bottom: 25px; }
         h1 { margin: 0; font-size: 22px; color: #38bdf8; font-weight: 700; }
         h2 { font-size: 13px; color: #94a3b8; margin-bottom: 15px; text-transform: uppercase; }
+        .session-tracker-bar { display: flex; gap: 10px; margin-bottom: 25px; }
+        .session-card { flex: 1; padding: 12px; border-radius: 8px; text-align: center; font-size: 12px; font-weight: 700; background-color: #111827; border: 1px solid #1f2937; color: #475569; }
+        .active-session-live { background-color: #1e1b4b; border: 2px solid #6366f1; color: #818cf8; }
         .section-split { display: flex; flex-direction: row; gap: 25px; width: 100%; align-items: flex-start; }
         .panel { background-color: #111827; border: 1px solid #1f1f23; border-radius: 10px; padding: 20px; flex: 1; }
         .right-column-stack { flex: 1; display: flex; flex-direction: column; gap: 25px; }
@@ -267,6 +268,13 @@ DASHBOARD_HTML = """
             <div><h1>Macro Sentiment Matrix Terminal</h1><div style="font-size: 12px; color: #64748b;">Active Anchor: {{ data.baseline_set_at }}</div></div>
             <div style="text-align: right; font-size: 12px; color: #64748b;">Sync: {{ data.api_sync_time }}<br>NY Time: {{ data.ny_time }}</div>
         </div>
+        
+        <div class="session-tracker-bar">
+            <div class="session-card {{ 'active-session-live' if data.active_session == 'ASIA' else '' }}">ASIA SESSION OPEN</div>
+            <div class="session-card {{ 'active-session-live' if data.active_session == 'LONDON' else '' }}">LONDON SESSION OPEN</div>
+            <div class="session-card {{ 'active-session-live' if data.active_session == 'NEW YORK' else '' }}">NEW YORK SESSION OPEN</div>
+        </div>
+
         <div class="section-split">
             <div class="panel">
                 <h2>Cumulative 24H Daily Sentiment</h2>
